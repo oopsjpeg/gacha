@@ -3,552 +3,555 @@ package com.oopsjpeg.gacha.command;
 import com.oopsjpeg.gacha.Gacha;
 import com.oopsjpeg.gacha.Util;
 import com.oopsjpeg.gacha.object.Card;
-import com.oopsjpeg.gacha.object.user.Bank;
-import com.oopsjpeg.gacha.object.user.UserInfo;
-import com.oopsjpeg.gacha.util.AmountParser;
-import com.oopsjpeg.gacha.util.CardQuery;
-import com.oopsjpeg.gacha.util.Constants;
-import com.oopsjpeg.gacha.util.PullType;
-import lombok.Getter;
-import lombok.RequiredArgsConstructor;
-import net.dv8tion.jda.core.EmbedBuilder;
-import net.dv8tion.jda.core.MessageBuilder;
-import net.dv8tion.jda.core.Permission;
-import net.dv8tion.jda.core.entities.Guild;
-import net.dv8tion.jda.core.entities.Message;
-import net.dv8tion.jda.core.entities.MessageChannel;
-import net.dv8tion.jda.core.entities.User;
+import com.oopsjpeg.gacha.object.user.Player;
+import com.oopsjpeg.gacha.object.user.PlayerCard;
+import com.oopsjpeg.gacha.object.Banner;
+import com.oopsjpeg.gacha.util.PagedList;
+import discord4j.common.util.Snowflake;
+import discord4j.core.GatewayDiscordClient;
+import discord4j.core.object.entity.Message;
+import discord4j.core.object.entity.User;
+import discord4j.core.object.entity.channel.MessageChannel;
+import discord4j.discordjson.json.ApplicationCommandOptionData;
+import discord4j.discordjson.json.ApplicationCommandRequest;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.util.*;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
 /**
  * Command interface.
  * Created by oopsjpeg on 1/30/2019.
  */
-@Getter
-@RequiredArgsConstructor
-public enum Command {
-    HELP("help", null, "View helpful information about Gacha.") {
-        @Override
-        public void execute(Message message, String alias, String[] args) {
-            MessageChannel channel = message.getChannel();
-            User author = message.getAuthor();
-            User self = message.getJDA().getSelfUser();
+public enum Command
+{
+    HELP("help", "View helpful information about Gacha Battle.")
+            {
+                @Override
+                public CommandResult execute(CommandCall call)
+                {
+                    MessageChannel channel = call.getChannel();
+                    User user = call.getUser();
+                    User self = call.getClient().getSelf().block();
 
-            EmbedBuilder builder = new EmbedBuilder();
-            builder.setColor(Util.getColor(self, channel.getIdLong()));
-            builder.setAuthor("Gacha Commands", null, self.getAvatarUrl());
-            builder.setDescription(Arrays.stream(Command.values())
-                    .sorted(Comparator.comparing(Command::getName))
-                    .map(c -> "`" + getInstance().getPrefix() + c.getName() + "`: " + c.getDescription())
-                    .collect(Collectors.joining("\n")));
-            Util.sendEmbed(channel, "Viewing all **Gacha** commands.", builder.build());
-        }
-    },
-
-    PROFILE("profile", null, "View your profile.") {
-        @Override
-        public void execute(Message message, String alias, String[] args) {
-            MessageChannel channel = message.getChannel();
-            User author = message.getAuthor();
-            UserInfo info = getInstance().getUser(author.getIdLong());
-            Bank bank = info.getBank();
-
-            EmbedBuilder builder = new EmbedBuilder();
-
-            int star = info.getCards().isEmpty() ? 1 : Collections.max(info.getCards().stream()
-                    .map(Card::getStar)
-                    .collect(Collectors.toList()));
-
-            builder.setAuthor(author.getName() + " (" + Util.star(star) + ")", null, author.getAvatarUrl());
-            builder.setColor(Util.getColor(author, channel.getIdLong()));
-            builder.setDescription(info.getDescription());
-
-            // Cards
-            builder.addField("Cards", Util.comma(info.getCards().size()), true);
-            // Crystals
-            String crystals = Util.comma(info.getCrystals() + bank.getCrystals());
-            String fromBank = bank.hasCrystals() ? " (" + Util.comma(info.getCrystals()) + " in hand)" : "";
-            builder.addField("Crystals", crystals + fromBank, true);
-            // Timelies
-            List<String> timelies = new ArrayList<>();
-            timelies.add(info.hasDaily() ? "**Daily** is available." : "**Daily** is available in " + Util.timeDiff(LocalDateTime.now(), info.getDailyDate().plusDays(1)) + ".");
-            timelies.add(info.hasWeekly() ? "**Weekly** is available." : "**Weekly** is available in " + Util.timeDiff(LocalDateTime.now(), info.getWeeklyDate().plusWeeks(1)) + ".");
-            builder.addField("Timelies", String.join("\n", timelies), false);
-
-            Util.sendEmbed(channel, "Viewing " + Util.formatUsername(author) + "'s profile.", builder.build());
-        }
-    },
-    REGISTER("register", null, "Register a new Gacha account.") {
-        @Override
-        public void execute(Message message, String alias, String[] args) {
-            MessageChannel channel = message.getChannel();
-            User author = message.getAuthor();
-
-            if (getInstance().getUsers().containsKey(author.getIdLong()))
-                Util.sendError(channel, author, "You are already registered with Gacha.");
-            else {
-                Util.send(channel, "You are now registered with Gacha!",
-                        "Check your profile with `/profile`."
-                                + "\nPull a random card for " + PullType.STANDARD.getCost() + " crystals with `/pull`."
-                                + "\nLearn how to forge new cards with `/forge`.",
-                        Util.getColor(author, channel.getIdLong()));
-                getInstance().getMongo().saveUser(getInstance().registerUser(author.getIdLong()));
-            }
-        }
-    },
-    DESCRIPTION("description", "[\"clear\"/new description]", "Update your profile description.") {
-        @Override
-        public void execute(Message message, String alias, String[] args) {
-            MessageChannel channel = message.getChannel();
-            User author = message.getAuthor();
-            UserInfo info = getInstance().getUser(author.getIdLong());
-
-            if (args.length == 0)
-                Util.sendError(channel, author, "You must enter a new profile description.");
-            else if (args[0].equalsIgnoreCase("clear")) {
-                info.setDescription(null);
-                Util.sendSuccess(channel, author, "Your profile description has been cleared.");
-                getInstance().getMongo().saveUser(info);
-            } else {
-                String description = String.join(" ", args);
-                if (description.length() > Constants.DESCRIPTION_MAX)
-                    Util.sendError(channel, author, "Your profile description must be at most " + Constants.DESCRIPTION_MAX + " characters.");
-                else {
-                    info.setDescription(description);
-                    Util.sendSuccess(channel, author, "Your profile description has been updated.");
-                    getInstance().getMongo().saveUser(info);
+                    return new CommandResult(call).setEmbed(e -> e
+                            .setTitle("Gacha Battle Commands")
+                            .setDescription(Arrays.stream(Command.values())
+                                    // Sort commands by name
+                                    .sorted(Comparator.comparing(Command::getName))
+                                    // Format and list the commands
+                                    .map(c -> "`" + call.format(c) + "` - " + c.getDescription())
+                                    .collect(Collectors.joining("\n"))));
                 }
-            }
-        }
-    },
-    BANK("bank", null, "Check your bank balance.") {
-        @Override
-        public void execute(Message message, String alias, String[] args) {
-            MessageChannel channel = message.getChannel();
-            User author = message.getAuthor();
-            UserInfo info = getInstance().getUser(author.getIdLong());
-            Bank bank = info.getBank();
+            },
+    PROFILE("profile", "View a player's profile.")
+            {
+                @Override
+                public CommandResult execute(CommandCall call)
+                {
+                    MessageChannel channel = call.getChannel();
+                    User user = call.getUser();
+                    Gacha gacha = call.getGacha();
+                    Player player = gacha.getPlayer(user);
+                    List<PlayerCard> cards = player.getCards();
 
-            if (args.length >= 1 && args[0].equalsIgnoreCase("deposit"))
-                DEPOSIT.execute(message, "deposit", Arrays.copyOfRange(args, 1, args.length));
-            else if (args.length >= 1 && args[0].equalsIgnoreCase("withdraw"))
-                WITHDRAW.execute(message, "withdraw", Arrays.copyOfRange(args, 1, args.length));
-            else {
-                EmbedBuilder builder = new EmbedBuilder();
-                builder.setAuthor(author.getName() + "'s Bank", null, author.getAvatarUrl());
-                builder.setColor(Util.getColor(author, channel.getIdLong()));
-                builder.setDescription("You may withdraw from the bank every " + Constants.BANK_COOLDOWN + " days."
-                        + "\nCrystals stored in the bank earn interest at a rate of **" + Util.percent(Constants.BANK_RATE) + "** with daily compounding.");
-                builder.addField("Crystals", Util.comma(bank.getCrystals()), true);
+                    PlayerCard displayCard = player.hasFavoriteCard() ? player.getFavoriteCard() : player.getBestCard();
 
-                if (bank.hasWithdrawal())
-                    builder.addField("Next Withdrawal", "You may make a withdrawal.", true);
-                else
-                    builder.addField("Next Withdrawal", bank.nextWithdrawal(), true);
+                    CommandResult result = new CommandResult(call).setEmbed(e ->
+                    {
+                        e.setAuthor(user.getUsername() + " (" + Util.stars(player.getTier()) + ")", null, user.getAvatarUrl());
+                        e.setColor(Util.getColor(user, channel));
+                        // Display Card Thumbnail
+                        if (displayCard != null) e.setThumbnail("attachment://" + displayCard.getId() + ".png");
+                        // Description
+                        e.setDescription(player.getDescription());
+                        // Resources
+                        e.addField("Resources", Util.sticker("Crystals", Util.crystals(player.getResources().getCrystals()))
+                                + "\n" + Util.sticker("Zenith Cores", Util.zenithCores(player.getResources().getZenithCores()))
+                                + "\n" + Util.sticker("Violet Runes", Util.violetRunes(player.getResources().getVioletRunes())), false);
+                        // Cards
+                        int cardsOwned = cards.size();
+                        int cardsTotal = gacha.getCards().size();
+                        float percentOwned = (float) cardsOwned / cardsTotal;
+                        e.addField("Cards", Util.comma(cardsOwned) + " / " + Util.comma(cardsTotal) + " (" + Util.percent(percentOwned) + ")", true);
+                        // Timelies
+                        List<String> timelies = new ArrayList<>();
+                        timelies.add(player.hasDaily() ? "**Daily** is available." : "**Daily** is available in " + player.timeUntilDaily());
+                        timelies.add(player.hasWeekly() ? "**Weekly** is available." : "**Weekly** is available in " + player.timeUntilWeekly());
+                        e.addField("Timelies", String.join("\n", timelies), false);
+                    });
 
-                Util.sendEmbed(channel, "Viewing " + Util.formatUsername(author) + "'s bank.", builder.build());
-            }
-        }
-    },
+                    if (displayCard != null)
+                        try (InputStream is = gacha.getCardImageCache().retrieveAsStream(displayCard.getCard()))
+                        {
+                            result.setFile(displayCard.getId() + ".png", gacha.getCardImageCache().retrieveAsStream(displayCard.getCard()));
+                        }
+                        catch (IOException error)
+                        {
+                            return CommandResult.failure(call, error);
+                        }
 
-    DEPOSIT("deposit", "<amount>", "Deposit crystals into your bank.") {
-        @Override
-        public void execute(Message message, String alias, String[] args) {
-            MessageChannel channel = message.getChannel();
-            User author = message.getAuthor();
-            UserInfo info = getInstance().getUser(author.getIdLong());
-            Bank bank = info.getBank();
-
-            if (args.length < 1)
-                Util.sendError(channel, author, "You must enter an amount to deposit.");
-            else {
-                try {
-                    int amount = AmountParser.getInt(args[0], info.getCrystals());
-
-                    if (info.getCrystals() < amount)
-                        Util.sendError(channel, author, "You do not have enough crystals to make this deposit.");
-
-                    bank.addCrystals(amount);
-                    info.removeCrystals(amount);
-                    getInstance().getMongo().saveUser(info);
-
-                    Util.sendSuccess(channel, author, "**" + Util.comma(amount) + "** crystal(s) have been deposited into your bank.");
-                } catch (NumberFormatException error) {
-                    Util.sendError(channel, author, "Invalid deposit amount.");
+                    return result;
                 }
-            }
-        }
-    },
-    WITHDRAW("withdraw", "<amount>", "Withdraw crystals from your bank.") {
-        @Override
-        public void execute(Message message, String alias, String[] args) {
-            MessageChannel channel = message.getChannel();
-            User author = message.getAuthor();
-            UserInfo info = getInstance().getUser(author.getIdLong());
-            Bank bank = info.getBank();
+            },
+    REGISTER("register", "Register a new Gacha Battle profile.")
+            {
+                @Override
+                public CommandResult execute(CommandCall call)
+                {
+                    Gacha gacha = call.getGacha();
+                    MessageChannel channel = call.getChannel();
+                    User user = call.getUser();
 
-            if (!bank.hasWithdrawal())
-                Util.sendError(channel, author, "You must wait " + bank.nextWithdrawal() + " before making another withdrawal.");
-            else if (args.length < 1)
-                Util.sendError(channel, author, "You must enter an amount to withdraw.");
-            else {
-                try {
-                    int amount = AmountParser.getInt(args[0], bank.getCrystals());
+                    if (gacha.hasPlayer(user))
+                        return CommandResult.failure(call, "You already registered a profile.");
 
-                    if (bank.getCrystals() < amount)
-                        Util.sendError(channel, author, "You do not have enough crystals to make this withdrawal.");
+                    gacha.getMongo().savePlayer(gacha.registerPlayer(user));
 
-                    info.addCrystals(amount);
-                    bank.removeCrystals(amount);
-                    bank.setWithdrawalDate(LocalDateTime.now());
-                    getInstance().getMongo().saveUser(info);
-
-                    Util.sendSuccess(channel, author, "**" + Util.comma(amount) + "** crystal(s) have been withdrawn from your bank.");
-                } catch (NumberFormatException error) {
-                    Util.sendError(channel, author, "Invalid withdrawal amount.");
+                    return new CommandResult(call).setEmbed(e -> e
+                            .setTitle("You're now registered to play Gacha Battle!")
+                            .setDescription("Check your profile with `" + call.format(PROFILE) + "`."
+                                    + "\nPull a new card with `" + call.format(PULL) + "`."
+                                    + "\nCollect a daily reward with `" + call.format(DAILY) + "`."
+                                    + "\n\nHave fun!")
+                            .setColor(Util.getColor(user, channel)));
                 }
-            }
-        }
-    },
+            },
+    DESCRIPTION("description", "Update your profile description.")
+            {
+                private static final int MAX_LENGTH = 200;
 
-    CARD("card", "[id]", "Show one of your cards.") {
-        @Override
-        public void execute(Message message, String alias, String[] args) {
-            MessageChannel channel = message.getChannel();
-            User author = message.getAuthor();
-            UserInfo info = getInstance().getUser(author.getIdLong());
+                @Override
+                public CommandResult execute(CommandCall call)
+                {
+                    Gacha gacha = call.getGacha();
+                    User user = call.getUser();
+                    Player player = gacha.getPlayer(user);
 
-            if (info.getCards().isEmpty())
-                Util.sendError(channel, author, "You do not have any cards.");
-            else {
-                Card card = null;
+                    if (!call.hasArguments())
+                    {
+                        if (!player.hasDescription())
+                            return CommandResult.failure(call, "You don't have a profile description set.");
+                        return CommandResult.info(call, player.getDescription());
+                    }
 
-                if (args.length <= 0)
-                    card = info.getCards().get(Util.RANDOM.nextInt(info.getCards().size()));
-                else {
-                    String search = String.join(" ", args);
-                    CardQuery query = new CardQuery(info.getCards()).search(search);
-                    if (!query.isEmpty()) card = query.get().get(Util.RANDOM.nextInt(query.size()));
+                    if (call.getArgument(0).equalsIgnoreCase("clear"))
+                    {
+                        if (!player.hasDescription())
+                            return CommandResult.failure(call, "You don't have a profile description set.");
+                        player.clearDescription();
+                        gacha.getMongo().savePlayer(player);
+                        return CommandResult.success(call, "Your profile description has been cleared.");
+                    }
+
+                    String description = call.getArgumentsRaw();
+                    if (description.length() > MAX_LENGTH)
+                        return CommandResult.failure(call, "Your profile description can't be longer than **" + MAX_LENGTH + "** characters.");
+
+                    player.setDescription(description);
+                    gacha.getMongo().savePlayer(player);
+
+                    return CommandResult.success(call, "Your profile description has been set.\n\n" + description);
                 }
+            },
+    FAVORITE("favorite", "Set your favorite card to show on your profile.")
+            {
+                @Override
+                public CommandResult execute(CommandCall call)
+                {
+                    User user = call.getUser();
+                    Gacha gacha = call.getGacha();
+                    Player player = gacha.getPlayer(user);
 
-                if (card == null)
-                    Util.sendError(channel, author, "You either do not have that card, or it does not exist.");
-                else {
-                    try {
-                        Util.sendCard(channel, author, card, Util.formatUsername(author) + " is viewing **" + card.getName() + "**.");
-                    } catch (IOException error) {
-                        throw new CommandException(error, this);
+                    if (!player.hasCards())
+                        return CommandResult.failure(call, "You don't have any cards.");
+
+                    try
+                    {
+                        if (!call.hasArguments())
+                        {
+                            if (!player.hasFavoriteCard())
+                                return CommandResult.failure(call, "You don't have a favorite card set.");
+                            return CommandResult.card(call, player.getFavoriteCard(), null, null);
+                        }
+
+                        if (call.getArgument(0).equalsIgnoreCase("clear"))
+                        {
+                            if (!player.hasFavoriteCard())
+                                return CommandResult.failure(call, "You don't have a favorite card set.");
+                            player.clearFavoriteCard();
+                            gacha.getMongo().savePlayer(player);
+                            return CommandResult.success(call, "Your favorite card has been cleared.");
+                        }
+
+                        PlayerCard card = player.searchCard(call.getArgumentsRaw());
+                        if (card == null)
+                            return CommandResult.failure(call, "You either don't have that card, or it doesn't exist.");
+
+                        player.setFavoriteCard(card);
+                        gacha.getMongo().savePlayer(player);
+
+                        return CommandResult.card(call, card, "Your favorite card has been set to **" + card.getName() + "**"
+                                + (card.getCard().hasVariant() ? " " + card.getCard().getVariant() : "") + ".", null);
+                    }
+                    catch (IOException error)
+                    {
+                        return CommandResult.failure(call, error);
                     }
                 }
-            }
-        }
-    },
-    CARDS("cards", "[page/\"all\"]", "View your cards.") {
-        @Override
-        public void execute(Message message, String alias, String[] args) {
-            MessageChannel channel = message.getChannel();
-            User author = message.getAuthor();
-            UserInfo info = getInstance().getUser(author.getIdLong());
+            },
+    CARD("card", "View one of your cards.")
+            {
+                @Override
+                public CommandResult execute(CommandCall call)
+                {
+                    Gacha gacha = call.getGacha();
+                    User user = call.getUser();
+                    Player player = gacha.getPlayer(user);
 
-            if (info.getCards().isEmpty())
-                Util.sendError(channel, author, "You do not have any cards.");
-            else {
-                if (args.length >= 1 && args[0].equalsIgnoreCase("all")) {
-                    try (ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
-                        baos.write((author.getName() + "'s Cards (" + Util.comma(info.getCards().size()) + ")\n"
-                                + new CardQuery(info.getCards()).raw())
-                                .getBytes(StandardCharsets.UTF_8));
+                    if (!player.hasCards())
+                        return CommandResult.failure(call, "You don't have any cards.");
 
-                        channel.sendFile(new ByteArrayInputStream(baos.toByteArray()),
-                                "Cards_" + Util.fileName(LocalDateTime.now().toString()) + ".txt",
-                                new MessageBuilder("Viewing all of " + Util.formatUsername(author) + "'s cards.").build()).complete();
-                    } catch (IOException error) {
-                        throw new CommandException(error, this);
+                    // Find the card by ID or name
+                    PlayerCard card = player.searchCard(call.getArgumentsRaw());
+                    if (card == null)
+                        return CommandResult.failure(call, "You either don't have that card, or it doesn't exist.");
+
+                    try
+                    {
+                        return CommandResult.card(call, card, null, null);
+                    }
+                    catch (IOException error)
+                    {
+                        return CommandResult.failure(call, error);
                     }
                 }
+            },
+    CARDS("cards", "View your cards.")
+            {
+                @Override
+                public CommandResult execute(CommandCall call)
+                {
+                    MessageChannel channel = call.getChannel();
+                    User user = call.getUser();
+                    Gacha gacha = call.getGacha();
+                    Player player = gacha.getPlayer(user);
 
-                CardQuery query = new CardQuery(info.getCards());
+                    if (!player.hasCards())
+                        return CommandResult.failure(call, "You don't have any cards.");
 
-                List<String> filters = new ArrayList<>();
-                for (String arg : args) {
-                    arg = arg.toLowerCase();
+                    PagedList<PlayerCard> cards = new PagedList<>(player.getCards(), 10);
+                    // Sort cards by star, then by name
+                    cards.sort(Comparator.comparingInt(PlayerCard::getTier).reversed().thenComparing(PlayerCard::getName));
 
-                    if (arg.contains("-ident")) {
-                        query.filter(card -> query.get().stream().filter(card::equals).count() >= 2);
-                        filters.add("Identical");
-                    }
-                }
+                    int cardsOwned = cards.size();
 
-                int page = 1;
-                if (args.length >= 1 && Util.isDigits(args[args.length - 1]))
-                    page = Integer.parseInt(args[args.length - 1]);
+                    // Show all cards
+                    if (call.getArgument(0).equalsIgnoreCase("all"))
+                    {
+                        try
+                        {
+                            ByteArrayOutputStream baos = new ByteArrayOutputStream();
 
-                if (page <= 0 || page > query.pages())
-                    Util.sendError(channel, author, "Invalid page.");
-                else {
-                    EmbedBuilder b = new EmbedBuilder();
-                    b.setAuthor(author.getName() + "'s Cards (" + Util.comma(info.getCards().size()) + ")", null, author.getAvatarUrl());
-                    b.setColor(Util.getColor(author, channel.getIdLong()));
-                    b.setDescription(query.page(page).format());
-                    b.setFooter("Page " + page + " / " + Util.comma(query.pages()) + (filters.isEmpty() ? ""
-                            : " [Filter: " + String.join(", ", filters) + "]"), null);
+                            baos.write((user.getUsername() + "'s Cards (" + Util.comma(cardsOwned) + ")"
+                                    + "\n" + cards.getOriginal().stream().map(PlayerCard::formatRaw)).getBytes(StandardCharsets.UTF_8));
+                            ByteArrayInputStream bais = new ByteArrayInputStream(baos.toByteArray());
 
-                    Util.sendEmbed(channel, "Viewing " + Util.formatUsername(author) + "'s cards.", b.build());
-                }
-            }
-        }
-    },
-    PULL("pull", null, "Pull a random card.") {
-        @Override
-        public void execute(Message message, String alias, String[] args) {
-            MessageChannel channel = message.getChannel();
-            User author = message.getAuthor();
-            UserInfo info = getInstance().getUser(author.getIdLong());
-            PullType type = PullType.STANDARD; // TODO Add selection when more types are available
+                            CommandResult result = new CommandResult(call)
+                                    .setContent("Viewing all of " + Util.formatUsername(user) + "'s cards.")
+                                    .setFile("Cards_" + Util.toFileName(LocalDateTime.now()) + ".txt", bais);
 
-            if (info.getCrystals() < type.getCost())
-                Util.sendError(channel, author, "You need **" + Util.comma(type.getCost()) + "** to pull from **" + type.getName() + "**.");
-            else {
-                Card card = type.get();
-                info.removeCrystals(type.getCost());
-                info.addCard(card);
+                            baos.close();
+                            bais.close();
 
-                try {
-                    Util.sendCard(channel, author, card, Util.formatUsername(author) + " pulled **" + card.getName() + "** from **" + type.getName() + "**.");
-                } catch (IOException error) {
-                    throw new CommandException(error, this);
-                }
-
-                getInstance().getMongo().saveUser(info);
-            }
-        }
-    },
-    FORGE("forge", "[ids seperated by spaces]", "Combine 3 cards of equal tier for a new card.") {
-        @Override
-        public void execute(Message message, String alias, String[] args) {
-            User author = message.getAuthor();
-            MessageChannel channel = message.getChannel();
-
-            if (args.length == 0)
-                Util.send(channel, "Forging",
-                        "Combine 3 cards of equal tier to forge a new card of equal or above tier."
-                                + "\nIdentical cards increase the chance of getting the above tier."
-                                + "\nUse `/forge <ids separated by spaces>` to combine the cards."
-                                + "\n\nFor example, to forge IDs 31, 12, and 17, use `/forge 31 12 17`.",
-                        Util.getColor(author, channel.getIdLong()));
-            else {
-                UserInfo info = getInstance().getUser(author.getIdLong());
-                int[] ids = Arrays.stream(args).mapToInt(s -> {
-                    try {
-                        return Integer.parseInt(s);
-                    } catch (NumberFormatException error) {
-                        return -1;
-                    }
-                }).toArray();
-
-                List<Card> available = new ArrayList<>(info.getCards());
-                List<Card> combine = new ArrayList<>();
-
-                // Store already specified ids
-                for (int i = 0; i < Math.min(3, ids.length); i++) {
-                    Card c = getInstance().getCard(ids[i]);
-                    if (!available.contains(c)) {
-                        Util.sendError(channel, author, "One or more of the specified card IDs is invalid.");
-                        return;
-                    }
-                    combine.add(c);
-                    available.remove(c);
-                }
-
-                // Attempt to reuse already specified ids if needed
-                if (combine.size() < 3) for (int i = 0; i <= 3 - combine.size(); i++) {
-                    for (int id : ids) {
-                        Card c = getInstance().getCard(id);
-                        if (available.contains(c)) {
-                            combine.add(c);
-                            available.remove(c);
-                            break;
+                            return result;
+                        }
+                        catch (IOException error)
+                        {
+                            return CommandResult.failure(call, error);
                         }
                     }
+
+                    AtomicInteger page = new AtomicInteger(1);
+
+                    if (Util.isDigits(call.getLastArgument()))
+                        page.set(Integer.parseInt(call.getLastArgument()));
+
+                    if (page.get() <= 0 || page.get() > cards.pages())
+                        return CommandResult.failure(call, "There's only " + cards.pages() + " page(s).");
+
+                    List<PlayerCard> pagedCards = cards.get();
+                    return new CommandResult(call).setEmbed(e -> e
+                            .setAuthor(user.getUsername() + "'s Cards (" + Util.comma(cardsOwned) + ")", null, user.getAvatarUrl())
+                            .setDescription(pagedCards.stream().map(PlayerCard::format).collect(Collectors.joining("\n")))
+                            .setFooter("Page " + page.get() + " / " + cards.pages(), null));
                 }
+            },
+    PULL("pull", "Pull a card.")
+            {
+                @Override
+                public CommandResult execute(CommandCall call)
+                {
+                    Gacha gacha = call.getGacha();
+                    User user = call.getUser();
+                    Player player = gacha.getPlayer(user);
+                    Banner banner = Banner.STANDARD; // TODO Add selection when more banners are available
 
-                // Minimum of 3 cards required
-                if (combine.size() < 3) {
-                    Util.sendError(channel, author, "You require at least 3 cards to forge.");
-                    return;
+                    if (player.getResources().getCrystals() < banner.getCost())
+                        return CommandResult.failure(call, "You need **" + Util.crystals(banner.getCost()) + "** to pull from **" + banner.getName() + "**.");
+
+                    Card card = banner.get(player);
+                    PlayerCard playerCard;
+                    String message = null;
+                    player.getResources().subCrystals(banner.getCost());
+
+                    if (player.hasCard(card))
+                    {
+                        playerCard = player.getCard(card);
+
+                        int violetRunes = 25 * card.getTier();
+                        int xp = (int) (160 + (playerCard.getMaxXp() * 0.4f));
+
+                        player.getResources().addVioletRunes(violetRunes);
+                        playerCard.addXp(xp);
+                        playerCard.handleXp();
+
+                        message = "**Re-Pull**"
+                                + "\n" + "**`+" + Util.violetRunes(violetRunes) + "`**"
+                                + "\n" + "**`+" + Util.xp(xp) + "`**";
+                    }
+                    else
+                    {
+                        playerCard = PlayerCard.create(player, card);
+                    }
+
+                    player.addCard(playerCard);
+                    gacha.getMongo().savePlayer(player);
+
+                    try
+                    {
+                        return CommandResult.card(call, playerCard, "Pulled **" + card.getName() + "** from **" + banner.getName() + "**.", message);
+                    }
+                    catch (IOException error)
+                    {
+                        return CommandResult.failure(call, error);
+                    }
                 }
+            },
+    DAILY("daily", "Collect your daily reward.")
+            {
+                private static final int CRYSTALS = 1000;
 
-                int star = combine.get(0).getStar();
-                // Legends cannot be forged
-                if (star == 6) {
-                    Util.sendError(channel, author, "You cannot forge Legend cards.");
-                    return;
+                @Override
+                public CommandResult execute(CommandCall call)
+                {
+                    Gacha gacha = call.getGacha();
+                    User user = call.getUser();
+                    Player player = gacha.getPlayer(user);
+
+                    if (!player.hasDaily())
+                        return CommandResult.failure(call, "Your **Daily** is available in " + player.timeUntilDaily() + ".");
+
+                    int amount = CRYSTALS;
+                    player.getResources().addCrystals(amount);
+                    player.setDailyDate(LocalDateTime.now());
+                    gacha.getMongo().savePlayer(player);
+
+                    return CommandResult.success(call, "+**`" + Util.crystals(amount) + "`** from **Daily**.");
                 }
-                // Equal tier required
-                if (combine.stream().anyMatch(c -> c.getStar() != star)) {
-                    Util.sendError(channel, author, "You can only forge cards of equal tier.");
-                    return;
+            },
+    WEEKLY("weekly", "Collect your weekly reward.")
+            {
+                private static final int CRYSTALS = 5000;
+
+                @Override
+                public CommandResult execute(CommandCall call)
+                {
+                    Gacha gacha = call.getGacha();
+                    User user = call.getUser();
+                    Player player = gacha.getPlayer(user);
+
+                    if (!player.hasWeekly())
+                        return CommandResult.failure(call, "Your **Weekly** is available in " + player.timeUntilWeekly() + ".");
+
+                    int amount = CRYSTALS;
+                    player.getResources().addCrystals(amount);
+                    player.setWeeklyDate(LocalDateTime.now());
+                    gacha.getMongo().savePlayer(player);
+
+                    return CommandResult.success(call, "+**`" + Util.crystals(amount) + "`** from **Weekly**.");
                 }
+            },
+    GIVE_CRYSTALS("givecrystals", "Give a player crystals.")
+            {
+                @Override
+                public CommandResult execute(CommandCall call)
+                {
+                    User user = call.getUser();
+                    User target = call.getClient().getUserById(Snowflake.of(call.getArgument(0))).block();
+                    Player targetData = call.getGacha().getPlayer(target);
+                    int crystals = Integer.parseInt(call.getArgument(1));
 
-                // Increase above tier chance from identical cards
-                float chance = 0.34f;
-                for (Card c : new HashSet<>(combine))
-                    chance += (Collections.frequency(combine, c) - 1) * 0.33f;
+                    targetData.getResources().addCrystals(crystals);
+                    call.getGacha().getMongo().savePlayer(targetData);
 
-                // Take the cards and gacha a new card
-                info.setCards(available);
-
-                boolean above = Util.RANDOM.nextFloat() <= chance;
-                List<Card> pool = getInstance().getCardsByStar(above ? star + 1 : star);
-                pool.removeIf(Card::isExclusive);
-                Card card = pool.get(Util.RANDOM.nextInt(pool.size()));
-                info.addCard(card);
-
-                try {
-                    Util.sendCard(channel, author, card, Util.formatUsername(author) + " got **"
-                            + card.getName() + "** from **Standard Forge**.");
-                } catch (IOException error) {
-                    throw new CommandException(error, this);
+                    return new CommandResult(call)
+                            .setEmbed(e -> e
+                                    .setDescription(Util.formatUsername(target) + " has received **" + Util.comma(crystals) + "** crystals."));
                 }
+            },
+    BACKUP("backup", "Create a MongoDB back-up.")
+            {
+                @Override
+                public CommandResult execute(CommandCall call)
+                {
+                    User user = call.getUser();
 
-                getInstance().getMongo().saveUser(info);
-            }
-        }
-    },
+                    //call.getGacha().getMongo().backup();
 
-    DAILY("daily", null, "Collect your daily bonus.") {
-        @Override
-        public void execute(Message message, String alias, String[] args) {
-            MessageChannel channel = message.getChannel();
-            User author = message.getAuthor();
-            UserInfo info = getInstance().getUser(author.getIdLong());
+                    return new CommandResult(call).setContent("Created backup at `" + LocalDateTime.now() + "`.");
+                }
+            },
+    COUNTHEARTS("counthearts", null)
+            {
+                @Override
+                public CommandResult execute(CommandCall call)
+                {
+                    GatewayDiscordClient client = call.getClient();
+                    List<Message> hearts = client.getChannelById(Snowflake.of(856984021078769695L))
+                            .cast(MessageChannel.class).block()
+                            .getMessagesAfter(Snowflake.of(857010045081878598L))
+                            .collectList().block();
+                    hearts.stream()
+                            .sorted(Comparator.comparingInt(m -> m.getReactions().isEmpty() ? 0 : m.getReactions().get(0).getCount()))
+                            .forEach(m ->
+                            {
+                                User submitter = m.getAuthor().get();
+                                int count = m.getReactions().isEmpty() ? 0 : m.getReactions().get(0).getCount();
 
-            if (!info.hasDaily())
-                Util.sendError(channel, author, "Your **Daily** is available in " + Util.timeDiff(LocalDateTime.now(), info.getDailyDate().plusDays(1)) + ".");
+                                System.out.println(submitter.getUsername() + "#" + submitter.getDiscriminator() + " : " + (count - 1) + " votes");
+                            });
+                    return CommandResult.success(call, "check console");
+                }
+            },
+    TESTCARD("testcard", null)
+            {
+                @Override
+                public CommandResult execute(CommandCall call)
+                {
+                    Player player = call.getGacha().getPlayer(call.getUser());
+                    Card card = call.getGacha().searchCard(call.getArgumentsRaw());
+                    try
+                    {
+                        return CommandResult.card(call, PlayerCard.create(player, card), null, null);
+                    }
+                    catch (IOException e)
+                    {
+                        return CommandResult.failure(call, "didnt work");
+                    }
+                }
+            };
 
-            int amount = Constants.TIMELY_DAY;
-            info.addCrystals(amount);
-            info.setDailyDate(LocalDateTime.now());
-            getInstance().getMongo().saveUser(info);
-            Util.sendSuccess(channel, author, "Collected **" + Util.comma(amount) + "** from **Daily**.");
-        }
-    },
-    WEEKLY("weekly", null, "Collect your weekly bonus.") {
-        @Override
-        public void execute(Message message, String alias, String[] args) {
-            MessageChannel channel = message.getChannel();
-            User author = message.getAuthor();
-            UserInfo info = getInstance().getUser(author.getIdLong());
+    static
+    {
+        //HELP.aliases = new String[]{"?", "about"};
 
-            if (!info.hasWeekly())
-                Util.sendError(channel, author, "Your **Weekly** is available in "
-                        + Util.timeDiff(LocalDateTime.now(), info.getWeeklyDate().plusWeeks(1)) + ".");
-            else {
-                int amount = Constants.TIMELY_WEEK;
-                info.addCrystals(amount);
-                info.setWeeklyDate(LocalDateTime.now());
-                Util.sendSuccess(channel, author, "Collected **" + Util.comma(amount) + "** from **Weekly**.");
-                getInstance().getMongo().saveUser(info);
-            }
-        }
-    },
-
-    TEST_CARD("testcard", "<id>", "Display a card by ID.") {
-        @Override
-        public void execute(Message message, String alias, String[] args) {
-            MessageChannel channel = message.getChannel();
-            Card card = getInstance().getCard(Integer.parseInt(args[0]));
-            try {
-                Util.sendCard(channel, message.getAuthor(), card, "");
-            } catch (IOException error) {
-                throw new CommandException(error, this);
-            }
-        }
-    };
-
-    static {
-        HELP.aliases = new String[]{"?", "about"};
-
-        PROFILE.aliases = new String[]{"account"};
+        //PROFILE.aliases = new String[]{"account", "bal", "balance"};
         PROFILE.registeredOnly = true;
-        DESCRIPTION.aliases = new String[]{"desc", "bio"};
+        //DESCRIPTION.aliases = new String[]{"desc", "bio"};
         DESCRIPTION.registeredOnly = true;
-        BANK.aliases = new String[]{"balance"};
-        BANK.registeredOnly = true;
 
-        DEPOSIT.registeredOnly = true;
-        WITHDRAW.registeredOnly = true;
-
-        CARD.aliases = new String[]{"show", "summon", "sum"};
+        //CARD.aliases = new String[]{"show", "summon", "sum"};
         CARD.registeredOnly = true;
         CARDS.registeredOnly = true;
-        PULL.aliases = new String[]{"gacha"};
+        //PULL.aliases = new String[]{"gacha"};
         PULL.registeredOnly = true;
-        FORGE.aliases = new String[]{"craft", "combine"};
-        FORGE.registeredOnly = true;
+        //FORGE.aliases = new String[]{"craft", "combine"};
+        //FORGE.registeredOnly = true;
 
         DAILY.registeredOnly = true;
         WEEKLY.registeredOnly = true;
 
-        TEST_CARD.registeredOnly = true;
-        TEST_CARD.developerOnly = true;
+        //TEST_CARD.registeredOnly = true;
+        //TEST_CARD.developerOnly = true;
+        GIVE_CRYSTALS.developerOnly = true;
+        BACKUP.developerOnly = true;
     }
 
     private final String name;
-    private final String usage;
     private final String description;
-    private String[] aliases = new String[0];
-    private EnumSet<Permission> permissions = EnumSet.noneOf(Permission.class);
-    private boolean guildOnly;
-    private boolean ownerOnly;
     private boolean developerOnly;
     private boolean registeredOnly;
-    private boolean adminOnly;
 
-    public static Command getFromAlias(String alias) {
-        for (Command command : values())
-            if (command.name.equalsIgnoreCase(alias) || Arrays.stream(command.aliases).anyMatch(a -> a.equalsIgnoreCase(alias)))
-                return command;
-        return null;
+    Command(String name, String description)
+    {
+        this.name = name;
+        this.description = description;
     }
 
-    public abstract void execute(Message message, String alias, String[] args) throws CommandException;
+    public abstract CommandResult execute(CommandCall call);
 
-    public void execute0(Message message, String alias, String[] args) throws CommandException {
-        User user = message.getAuthor();
-        Guild guild = message.getGuild();
+    public CommandResult tryExecute(CommandCall call)
+    {
+        User user = call.getUser();
 
         // Developer only
-        if (developerOnly && !user.equals(message.getJDA().asBot().getApplicationInfo().complete().getOwner()))
-            throw new NotDeveloperException(this);
-        // Not in guild
-        if ((guildOnly || ownerOnly || adminOnly || !permissions.isEmpty()) && guild == null)
-            throw new NotInGuildException(this);
-        // Not owner
-        if (ownerOnly && user.getIdLong() != guild.getOwnerIdLong())
-            throw new NotOwnerException(this);
-        // Not admin
-        if (adminOnly && !guild.getMember(user).getPermissions().contains(Permission.ADMINISTRATOR))
-            throw new NotAdminException(this);
-        // Invalid perms
-        if (!permissions.isEmpty() && !guild.getMember(user).getPermissions(message.getTextChannel()).containsAll(permissions))
-            throw new InvalidPermsException(this);
+        if (developerOnly && !user.equals(call.getClient().getApplicationInfo().block().getOwner().block()))
+            return CommandResult.failure(call, "You're not a developer.");
         // Registered only
-        if (registeredOnly && !getInstance().getUsers().containsKey(user.getIdLong()))
-            throw new NotRegisteredException(this);
-        // TODO: Invalid usage
+        if (registeredOnly && !call.getGacha().hasPlayer(user))
+            return CommandResult.failure(call, "You're not registered yet. Use `" + call.format(Command.REGISTER) + "` to create a profile.");
 
-        execute(message, alias, args);
+        return execute(call);
     }
 
-    protected Gacha getInstance() {
-        return Gacha.getInstance();
+    public boolean canExecute(CommandCall call)
+    {
+        Gacha gacha = call.getGacha();
+        User user = call.getUser();
+        GatewayDiscordClient client = gacha.getClient();
+        User owner = client.getApplicationInfo().block().getOwner().block();
+
+        return (!registeredOnly || gacha.hasPlayer(user)) && (!developerOnly || user.equals(owner));
+    }
+
+    public ApplicationCommandRequest app()
+    {
+        return ApplicationCommandRequest.builder()
+                .name(getName())
+                .description(getDescription())
+                .options(getOptions())
+                .build();
+    }
+
+    public String getName()
+    {
+        return name;
+    }
+
+    public String getDescription()
+    {
+        return description;
+    }
+
+    public List<ApplicationCommandOptionData> getOptions()
+    {
+        return Collections.emptyList();
+    }
+
+    public boolean isDeveloperOnly()
+    {
+        return developerOnly;
+    }
+
+    public boolean isRegisteredOnly()
+    {
+        return registeredOnly;
     }
 }

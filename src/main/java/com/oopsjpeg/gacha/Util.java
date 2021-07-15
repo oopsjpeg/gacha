@@ -1,85 +1,53 @@
 package com.oopsjpeg.gacha;
 
-import com.oopsjpeg.gacha.object.Card;
-import com.oopsjpeg.gacha.object.CardEmbed;
-import com.oopsjpeg.gacha.util.Embeds;
-import net.dv8tion.jda.core.EmbedBuilder;
-import net.dv8tion.jda.core.MessageBuilder;
-import net.dv8tion.jda.core.entities.MessageChannel;
-import net.dv8tion.jda.core.entities.MessageEmbed;
-import net.dv8tion.jda.core.entities.User;
+import discord4j.core.GatewayDiscordClient;
+import discord4j.core.object.entity.Guild;
+import discord4j.core.object.entity.Member;
+import discord4j.core.object.entity.Role;
+import discord4j.core.object.entity.User;
+import discord4j.core.object.entity.channel.Channel;
+import discord4j.core.object.entity.channel.GuildChannel;
 
-import javax.imageio.ImageIO;
 import java.awt.*;
 import java.awt.geom.Rectangle2D;
 import java.awt.image.BufferedImage;
-import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.text.DecimalFormat;
 import java.time.Duration;
 import java.time.LocalDateTime;
-import java.util.List;
 import java.util.*;
 import java.util.stream.Collectors;
 
-public class Util {
+public class Util
+{
+
     public static final Random RANDOM = new Random();
 
-    public static CardEmbed generateImage(Card card) throws IOException {
-        BufferedImage canvas = new BufferedImage(500, 680, BufferedImage.TYPE_3BYTE_BGR);
-        BufferedImage base = ImageIO.read(new File(Gacha.DATA_FOLDER + "\\cards\\base\\" + card.getBase() + ".png"));
-        BufferedImage image = ImageIO.read(new File(Gacha.DATA_FOLDER + "\\cards\\" + card.getImage() + ".png"));
-        Font font;
+    public static Color tweakColorAlpha(Color old, int alpha)
+    {
+        return new Color(old.getRed(), old.getGreen(), old.getBlue(), alpha);
+    }
 
-        try (InputStream fontStream = Util.class.getClassLoader().getResourceAsStream(card.getFont() + ".TTF")) {
-            font = Font.createFont(Font.TRUETYPE_FONT, fontStream).deriveFont(Font.PLAIN, card.getFontSize());
-        } catch (FontFormatException error) {
-            font = new Font("Arial", Font.PLAIN, card.getFontSize());
+    public static Font font(String font, int size) throws IOException
+    {
+        try (InputStream fontStream = Util.class.getClassLoader().getResourceAsStream(font + ".TTF"))
+        {
+            return Font.createFont(Font.TRUETYPE_FONT, fontStream).deriveFont(Font.PLAIN, size);
         }
-
-        drawImage(canvas, base, 0, 0, 0, canvas.getWidth(), canvas.getHeight());
-
-        Graphics2D g2d = canvas.createGraphics();
-        g2d.setComposite(AlphaComposite.SrcAtop);
-        g2d.setColor(card.getBaseColor());
-        g2d.fillRect(0, 0, canvas.getWidth(), canvas.getHeight());
-
-        drawImage(canvas, image, 0, 16, 90, 468, 468);
-
-        drawText(canvas, card.getName(), font, card.getTextColor(), 1, (float) canvas.getWidth() / 2, 45);
-
-        Font textFont = new Font("Default", Font.BOLD, 60);
-        drawText(canvas, star(card.getStar()), textFont, card.getTextColor(), 1, (float) canvas.getWidth() / 2, canvas.getHeight() - 69);
-        if (card.getStar() == 6) {
-            Font miniFont = textFont.deriveFont(46.0f);
-            Color miniColor = new Color(card.getTextColor().getRed(), card.getTextColor().getGreen(), card.getTextColor().getBlue(), 116);
-            drawText(canvas, star(3), miniFont, miniColor, 1, 150, canvas.getHeight() - 69);
-            drawText(canvas, star(3), miniFont, miniColor, 1, canvas.getWidth() - 149, canvas.getHeight() - 69);
+        catch (FontFormatException error)
+        {
+            return new Font("Arial", Font.PLAIN, size);
         }
-
-        canvas.getGraphics().dispose();
-
-        return new CardEmbed(card.getId(), canvas, card.getBaseColor());
     }
 
-    public static String star(int stars) {
-        if (stars == 6) return "\u2727";
-
-        return String.join("", Collections.nCopies(stars, "\u2606"));
-    }
-
-    public static String starEscaped(int stars) {
-        StringBuilder output = new StringBuilder();
-        star(stars).chars().forEach(i -> output.append("\\").append((char) i));
-        return output.toString();
-    }
-
-    public static void drawImage(BufferedImage src, BufferedImage image, int align, int x, int y, int w, int h) {
+    public static void drawImage(BufferedImage src, BufferedImage image, int align, int x, int y, int w, int h)
+    {
         Graphics2D g2d = src.createGraphics();
         g2d.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
         g2d.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
-        switch (align) {
+        switch (align)
+        {
             case 1:
                 g2d.drawImage(image, x - (w / 2), y, w, h, null);
                 break;
@@ -92,7 +60,8 @@ public class Util {
         }
     }
 
-    public static void drawText(BufferedImage src, String s, Font font, Color color, int align, float x, float y) {
+    public static void drawText(BufferedImage src, String s, Font font, Color color, int align, float x, float y)
+    {
         Graphics2D g2d = src.createGraphics();
         g2d.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
         g2d.setFont(font);
@@ -104,7 +73,8 @@ public class Util {
         float fWidth = (float) bounds.getWidth();
         float fHeight = (float) bounds.getHeight();
 
-        switch (align) {
+        switch (align)
+        {
             case 1:
                 g2d.drawString(s, x - (fWidth / 2), y - (fHeight / 2) + ascent);
                 break;
@@ -117,97 +87,138 @@ public class Util {
         }
     }
 
-    public static String fileName(String s) {
-        return s.replaceAll("[^a-zA-Z0-9.\\-]", "_");
-    }
-
-    public static String formatUsername(User user) {
-        return "**" + user.getName() + "**#" + user.getDiscriminator();
-    }
-
-    public static void send(MessageChannel channel, String title, String content, Color color) {
-        channel.sendMessage(new MessageBuilder().setEmbed(new EmbedBuilder()
-                .setColor(color)
-                .setTitle(title)
-                .setDescription(content).build()).build()).queue();
-    }
-
-    public static void sendEmbed(MessageChannel channel, String content, MessageEmbed embed) {
-        channel.sendMessage(new MessageBuilder(content).setEmbed(embed).build()).complete();
-    }
-
-    public static void sendCard(MessageChannel channel, User user, Card card, String content) throws IOException {
-        try (InputStream is = Gacha.getInstance().getCardEmbed(card.getId()).get()) {
-            channel.sendFile(is, card.getId() + ".png", new MessageBuilder(content)
-                    .setEmbed(Embeds.card(user, card)).build()).complete();
+    public static String stars(int amount)
+    {
+        if (amount == 6)
+        {
+            return "\u2726";
         }
+
+        return String.join("", Collections.nCopies(amount, "\u2605"));
     }
 
-    public static void sendError(MessageChannel channel, User user, String content) {
-        send(channel, null, ":x: " + formatUsername(user) + ": " + content, new Color(221, 46, 68));
+    public static String starsRaw(int amount)
+    {
+        StringBuilder output = new StringBuilder();
+        stars(amount).chars().forEach(c -> output.append("\\").append((char) c));
+        return output.toString();
     }
 
-    public static void sendSuccess(MessageChannel channel, User user, String content) {
-        send(channel, null, ":white_check_mark: " + formatUsername(user) + ": " + content, new Color(119, 178, 85));
+    public static String toFileName(Object o)
+    {
+        return o.toString().replaceAll("[^a-zA-Z0-9.\\-]", "_");
     }
 
-    public static boolean checkListType(Object object, Class clazz) {
-        if (!(object instanceof List)) return false;
-        List list = (List) object;
-        return !list.isEmpty() && list.get(0).getClass().equals(clazz);
+    public static String formatUsername(User user)
+    {
+        return user.getUsername() + "#" + user.getDiscriminator();
     }
 
-    public static Color getColor(User user, long channelId) {
-        Color color = Color.LIGHT_GRAY;
-        // TODO Fix
-        //Channel channel = user.getJDA().getTextChannelById(channelId);
-//
-        //if (channel.getType() == ChannelType.TEXT) {
-        //    List<Role> roles = channel.getGuild().getMember(user).getRoles().stream()
-        //            .sorted(Comparator.comparingInt(Role::getPosition))
-        //            .collect(Collectors.toList());
-//
-        //    for (Role role : roles)
-        //        if (role.getColor() != null)
-        //            color = role.getColor();
-        //}
+    public static discord4j.rest.util.Color getColor(User user, Channel channel)
+    {
+        GatewayDiscordClient client = user.getClient();
+        // Check if the channel is in a guild
+        if (channel instanceof GuildChannel)
+        {
+            Guild guild = ((GuildChannel) channel).getGuild().block();
+            Member member = user.asMember(guild.getId()).block();
+            return getColor(member);
+        }
+
+        return discord4j.rest.util.Color.LIGHT_GRAY;
+    }
+
+    public static discord4j.rest.util.Color getColor(Member member)
+    {
+        discord4j.rest.util.Color color = discord4j.rest.util.Color.LIGHT_GRAY;
+
+        // Get top-most role with a color
+        Role topRole = member.getRoles()
+                .filter(r -> !r.getColor().equals(discord4j.rest.util.Color.of(0)))
+                .sort(Comparator.comparingInt(Role::getRawPosition))
+                .blockLast();
+
+        if (topRole != null)
+            color = topRole.getColor();
 
         return color;
     }
 
-    public static Color stringToColor(String s) {
-        List<Float> rgba = Arrays.stream(s.split(","))
-                .map(Float::parseFloat).collect(Collectors.toList());
-        return new Color(rgba.get(0), rgba.get(1), rgba.get(2), rgba.get(3));
+    public static Color stringToColor(String s)
+    {
+        int[] rgb = Arrays.stream(s.split(", ")).mapToInt(Integer::parseInt).toArray();
+        return new Color(rgb[0], rgb[1], rgb[2]);
     }
 
-    public static boolean isDigits(CharSequence str) {
-        return str.codePoints().allMatch(Character::isDigit);
+    public static boolean isDigits(CharSequence str)
+    {
+        return str.length() > 0 && str.codePoints().allMatch(Character::isDigit);
     }
 
-    public static String timeDiff(LocalDateTime date1, LocalDateTime date2) {
+    public static String timeDiff(LocalDateTime date1, LocalDateTime date2)
+    {
         Duration duration = Duration.between(date1, date2);
         Stack<String> stack = new Stack<>();
 
-        if (duration.toDays() > 0) stack.push(duration.toDays() + "d");
+        if (duration.toDays() > 0)
+            stack.push(duration.toDays() + "d");
         duration = duration.minusDays(duration.toDays());
 
-        if (duration.toHours() > 0) stack.push(duration.toHours() + "h");
+        if (duration.toHours() > 0)
+            stack.push(duration.toHours() + "h");
         duration = duration.minusHours(duration.toHours());
 
-        if (duration.toMinutes() > 0) stack.push(duration.toMinutes() + "m");
+        if (duration.toMinutes() > 0)
+            stack.push(duration.toMinutes() + "m");
         duration = duration.minusMinutes(duration.toMinutes());
 
-        if (duration.getSeconds() > 0) stack.push(duration.getSeconds() + "s");
+        if (duration.getSeconds() > 0)
+            stack.push(duration.getSeconds() + "s");
 
         return stack.stream().limit(3).collect(Collectors.joining(" "));
     }
 
-    public static String comma(int value) {
+    public static String comma(int value)
+    {
         return new DecimalFormat("#,###").format(value);
     }
 
-    public static String percent(float f) {
-        return new DecimalFormat("#.##").format(f * 100) + "%";
+    public static String percent(float f)
+    {
+        return new DecimalFormat("#").format(f * 100) + "%";
+    }
+
+    public static String sticker(String key, String value)
+    {
+        return "[**" + key + "**] " + value;
+    }
+
+    public static String crystals(int cr)
+    {
+        return "CR $" + comma(cr);
+    }
+
+    public static String violetRunes(int vr)
+    {
+        return "VR $" + comma(vr);
+    }
+
+    public static String zenithCores(int zc)
+    {
+        return "ZC $" + comma(zc);
+    }
+
+    public static String xp(int xp)
+    {
+        return "XP " + comma(xp);
+    }
+
+    public static int fontSize(String font)
+    {
+        switch (font)
+        {
+            default:
+                return 36;
+        }
     }
 }

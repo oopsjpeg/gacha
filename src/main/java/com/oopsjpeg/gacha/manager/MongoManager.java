@@ -1,94 +1,79 @@
 package com.oopsjpeg.gacha.manager;
 
-import com.mongodb.MongoClient;
+import com.mongodb.ConnectionString;
+import com.mongodb.MongoClientSettings;
+import com.mongodb.client.MongoClients;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.MongoDatabase;
 import com.mongodb.client.model.Filters;
 import com.mongodb.client.model.ReplaceOptions;
-import com.mongodb.util.JSON;
 import com.oopsjpeg.gacha.Gacha;
-import com.oopsjpeg.gacha.object.user.UserInfo;
-import org.bson.Document;
+import com.oopsjpeg.gacha.object.user.Player;
+import com.oopsjpeg.gacha.object.json.PlayerJson;
+import discord4j.common.util.Snowflake;
+import org.bson.codecs.configuration.CodecRegistries;
+import org.bson.codecs.configuration.CodecRegistry;
+import org.bson.codecs.pojo.PojoCodecProvider;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-import java.io.File;
-import java.io.IOException;
-import java.time.LocalDateTime;
-import java.util.concurrent.TimeUnit;
+import java.util.HashMap;
+import java.util.function.Consumer;
 
 /**
  * Manages all MongoDB interactions.
  * Created by oopsjpeg on 2/3/2019.
  */
-public class MongoManager {
-    private final String database;
-    private MongoClient client;
+public class MongoManager
+{
+    private final Gacha gacha;
+    private final MongoDatabase database;
+    private final Logger logger = LoggerFactory.getLogger(this.getClass());
 
-    public MongoManager(String host, String database) {
-        this.database = database;
-        client = new MongoClient(host);
+    public MongoManager(Gacha gacha, String hostname, String database)
+    {
+        this.gacha = gacha;
 
-        // Set up the backup timer
-        Gacha.SCHEDULER.scheduleAtFixedRate(this::backup, 0, 1, TimeUnit.HOURS);
+        ConnectionString connection = new ConnectionString(hostname);
+        // Add BSON/POJO translator
+        CodecRegistry pojoRegistry = CodecRegistries.fromProviders(PojoCodecProvider.builder().automatic(true).build());
+        // Add default codec for Java types
+        CodecRegistry registry = CodecRegistries.fromRegistries(MongoClientSettings.getDefaultCodecRegistry(), pojoRegistry);
+        // Create settings
+        MongoClientSettings settings = MongoClientSettings.builder()
+                .applyConnectionString(connection)
+                .codecRegistry(registry)
+                .build();
+
+        this.database = MongoClients.create(settings).getDatabase(database);
     }
 
-    public boolean isConnected() {
-        try {
-            client.getAddress();
-            return true;
-        } catch (Exception error) {
-            return false;
-        }
+    public MongoCollection<PlayerJson> getPlayerCollection()
+    {
+        return database.getCollection("players", PlayerJson.class);
     }
 
-    public MongoClient getClient() {
-        return client;
+    public HashMap<String, Player> fetchPlayers()
+    {
+        HashMap<String, Player> playerMap = new HashMap<>();
+        // Add each user into the map by ID
+        getPlayerCollection().find().forEach((Consumer<PlayerJson>) data ->
+        {
+            Player player = new Player(gacha, data);
+            logger.info("Fetched player data for ID " + data.id);
+            playerMap.put(player.getId(), player);
+        });
+        return playerMap;
     }
 
-    public MongoDatabase getDatabase() {
-        return client.getDatabase(database);
+    public void savePlayer(Player player)
+    {
+        savePlayer(player.getData());
     }
 
-    public MongoCollection<Document> getUsers() {
-        return getDatabase().getCollection("users");
-    }
-
-    public File getBackupFile(LocalDateTime time) {
-        return new File(Gacha.DATA_FOLDER + "\\backups\\gacha_users_" + time.getYear() + "-"
-                + time.getMonthValue() + "-" + time.getDayOfMonth() + "-"
-                + time.getHour() + ".json");
-    }
-
-    public void backup() {
-        File file = getBackupFile(LocalDateTime.now());
-        if (!file.exists()) forceBackup(file);
-    }
-
-    public void forceBackup(File file) {
-        try {
-            if (isConnected()) {
-                Runtime rt = Runtime.getRuntime();
-                Process pr = rt.exec("mongoexport --db " + database + " --collection users --out " + file);
-                pr.waitFor();
-            }
-        } catch (IOException | InterruptedException error) {
-            error.printStackTrace();
-        }
-    }
-
-    public void loadUsers() {
-        for (Document d : getUsers().find())
-            try {
-                loadUser(d);
-            } catch (Exception error) {
-                error.printStackTrace();
-            }
-    }
-
-    public void loadUser(Document d) {
-        Gacha.getInstance().getUsers().put(d.getLong("_id"), Gacha.GSON.fromJson(JSON.serialize(d), UserInfo.class));
-    }
-
-    public void saveUser(UserInfo u) {
-        getUsers().replaceOne(Filters.eq(u.getId()), Document.parse(Gacha.GSON.toJson(u)), new ReplaceOptions().upsert(true));
+    public void savePlayer(PlayerJson data)
+    {
+        logger.info("Saving player data for ID " + data.id);
+        getPlayerCollection().replaceOne(Filters.eq("_id", data.id), data, new ReplaceOptions().upsert(true));
     }
 }
